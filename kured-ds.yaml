@@ -50,6 +50,7 @@ spec:
 #            - --blocking-pod-selector=...
 #            - --ds-name=kured
 #            - --ds-namespace=kube-system
+#            - --host-sentinel=/var/lib/rancher/update/reboot-now
 #            - --end-time=23:59:59
 #            - --lock-annotation=weave.works/kured-node-lock
 #            - --period=1h
@@ -61,3 +62,11 @@ spec:
 #            - --slack-channel=alerting
 #            - --start-time=0:00
 #            - --time-zone=UTC
+#          volumeMounts:
+#            - mountPath: /var/lib/rancher/update/
+#              name: rancher
+#      volumes:
+#        - name: rancher
+#          hostPath:
+#            path: /var/lib/rancher/update/
+#            type: Directory

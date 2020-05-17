@@ -36,6 +36,7 @@ var (
 	prometheusURL  string
 	alertFilter    *regexp.Regexp
 	rebootSentinel string
+	hostSentinel   string
 	slackHookURL   string
 	slackUsername  string
 	slackChannel   string
@@ -78,6 +79,8 @@ func main() {
 		"alert names to ignore when checking for active alerts")
 	rootCmd.PersistentFlags().StringVar(&rebootSentinel, "reboot-sentinel", "/var/run/reboot-required",
 		"path to file whose existence signals need to reboot")
+	rootCmd.PersistentFlags().StringVar(&hostSentinel, "host-sentinel", "",
+		"path to file whose existence signals the undelying OS he can safely reboot now (external handling of reboot cmd)")
 
 	rootCmd.PersistentFlags().StringVar(&slackHookURL, "slack-hook-url", "",
 		"slack hook URL for reboot notfications")
@@ -121,20 +124,28 @@ func newCommand(name string, arg ...string) *exec.Cmd {
 }
 
 func sentinelExists() bool {
-	// Relies on hostPID:true and privileged:true to enter host mount space
-	sentinelCmd := newCommand("/usr/bin/nsenter", "-m/proc/1/ns/mnt", "--", "/usr/bin/test", "-f", rebootSentinel)
-	if err := sentinelCmd.Run(); err != nil {
-		switch err := err.(type) {
-		case *exec.ExitError:
-			// We assume a non-zero exit code means 'reboot not required', but of course
-			// the user could have misconfigured the sentinel command or something else
-			// went wrong during its execution. In that case, not entering a reboot loop
-			// is the right thing to do, and we are logging stdout/stderr of the command
-			// so it should be obvious what is wrong.
-			return false
-		default:
-			// Something was grossly misconfigured, such as the command path being wrong.
-			log.Fatalf("Error invoking sentinel command: %v", err)
+	if hostSentinel == "" {
+		// Relies on hostPID:true and privileged:true to enter host mount space
+		sentinelCmd := newCommand("/usr/bin/nsenter", "-m/proc/1/ns/mnt", "--", "/usr/bin/test", "-f", rebootSentinel)
+		if err := sentinelCmd.Run(); err != nil {
+			switch err := err.(type) {
+			case *exec.ExitError:
+				// We assume a non-zero exit code means 'reboot not required', but of course
+				// the user could have misconfigured the sentinel command or something else
+				// went wrong during its execution. In that case, not entering a reboot loop
+				// is the right thing to do, and we are logging stdout/stderr of the command
+				// so it should be obvious what is wrong.
+				return false
+			default:
+				// Something was grossly misconfigured, such as the command path being wrong.
+				log.Fatalf("Error invoking sentinel command: %v", err)
+			}
+		}
+	} else {
+		// Relies on the ability to access underlying host filesystem
+		// If hostSentinel is set, don't use nsenter for validating rebootSentinel
+		if _, err := os.Open(rebootSentinel); err == nil {
+			return true
 		}
 	}
 	return true
@@ -144,10 +155,10 @@ func rebootRequired() bool {
 	if sentinelExists() {
 		log.Infof("Reboot required")
 		return true
-	} else {
-		log.Infof("Reboot not required")
-		return false
 	}
+
+	log.Infof("Reboot not required")
+	return false
 }
 
 func rebootBlocked(client *kubernetes.Clientset, nodeID string) bool {
@@ -261,10 +272,22 @@ func commandReboot(nodeID string) {
 		}
 	}
 
-	// Relies on hostPID:true and privileged:true to enter host mount space
-	rebootCmd := newCommand("/usr/bin/nsenter", "-m/proc/1/ns/mnt", "/bin/systemctl", "reboot")
-	if err := rebootCmd.Run(); err != nil {
-		log.Fatalf("Error invoking reboot command: %v", err)
+	if hostSentinel == "" {
+		// Relies on hostPID:true and privileged:true to enter host mount space
+		rebootCmd := newCommand("/usr/bin/nsenter", "-m/proc/1/ns/mnt", "/bin/systemctl", "reboot")
+		if err := rebootCmd.Run(); err != nil {
+			log.Fatalf("Error invoking reboot command: %v", err)
+		}
+	} else {
+		// Relies on the ability to create a sentinel file on the underlying host filesystem
+		// The underlying host can check if this sentinel file exitst to reboot the system
+		if _, err := os.Create(hostSentinel); err != nil {
+			log.Fatalf("Error invoking reboot command: %v", err)
+		} else {
+			log.Infof("Creating hostSentinel file: %s", hostSentinel)
+			log.Infof("Your underlying host OS need to have a mecanism to reboot when %s exist", hostSentinel)
+			return
+		}
 	}
 }
 
@@ -307,7 +330,7 @@ func rebootAsRequired(nodeID string, window *timewindow.TimeWindow) {
 
 	source := rand.NewSource(time.Now().UnixNano())
 	tick := delaytick.New(source, period)
-	for _ = range tick {
+	for range tick {
 		if window.Contains(time.Now()) && rebootRequired() && !rebootBlocked(client, nodeID) {
 			node, err := client.CoreV1().Nodes().Get(context.TODO(), nodeID, metav1.GetOptions{})
 			if err != nil {

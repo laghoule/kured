@@ -6,12 +6,14 @@
 * [Installation](#installation)
 * [Configuration](#configuration)
 	* [Reboot Sentinel File & Period](#reboot-sentinel-file-&-period)
-	* [Setting a schedule](#setting-a-schedule)
-	* [Blocking Reboots via Alerts](#blocking-reboots-via-alerts)
-	* [Blocking Reboots via Pods](#blocking-reboots-via-pods)
-	* [Prometheus Metrics](#prometheus-metrics)
-	* [Slack Notifications](#slack-notifications)
-	* [Overriding Lock Configuration](#overriding-lock-configuration)
+  * [Host Sentinel File](#host-sentinel-file)
+    * [RancherOS example](#RancherOS-example-(cloud-init-config))
+  * [Setting a schedule](#setting-a-schedule)
+  * [Blocking Reboots via Alerts](#blocking-reboots-via-alerts)
+  * [Blocking Reboots via Pods](#blocking-reboots-via-pods)
+  * [Prometheus Metrics](#prometheus-metrics)
+  * [Slack Notifications](#slack-notifications)
+  * [Overriding Lock Configuration](#overriding-lock-configuration)
 * [Operation](#operation)
 	* [Testing](#testing)
 	* [Disabling Reboots](#disabling-reboots)
@@ -77,6 +79,7 @@ Flags:
       --blocking-pod-selector stringArray   label selector identifying pods whose presence should prevent reboots
       --ds-name string                      name of daemonset on which to place lock (default "kured")
       --ds-namespace string                 namespace containing daemonset on which to place lock (default "kube-system")
+      --host-sentinel string                path to file whose existence signals the undelying OS he can safely reboot now (external handling of reboot cmd)
       --end-time string                     only reboot before this time of day (default "23:59")
   -h, --help                                help for kured
       --lock-annotation string              annotation in which to record locking node (default "weave.works/kured-node-lock")
@@ -98,6 +101,84 @@ By default kured checks for the existence of
 values with `--reboot-sentinel` and `--period`. Each replica of the
 daemon uses a random offset derived from the period on startup so that
 nodes don't all contend for the lock simultaneously.
+
+### Host Sentinel File
+If your underlying hosts OS don't support `nsenter`, as RancherOS, you
+will need to handle the reboot externally. You can create a cronjob whose 
+function is to monitor the existance of the host-sentienl file. When it 
+exist, the node can safely call the reboot cmd.
+
+#### RancherOS example (cloud-init config)
+
+```yaml
+write_files:
+  # Script to upgrade image OS if available (no reboot)
+  # Reboot is handled by K8S kured daemonset
+  - path: /var/lib/rancher/os-updater.sh
+    permissions: "0755"
+    owner: root
+    content: |
+      #!/bin/sh
+
+      source /usr/share/ros/os-release
+
+      STATUS=0
+      OS_LOCATION=`sudo ros os list | head -n1 | awk {'print $2'}`
+      OS_VERSION=`sudo ros os list | head -n1 | awk {'print $1'} | cut -d : -f 2`
+
+      if [ "$OS_LOCATION" == "local" ] && [ "$OS_VERSION" != "$VERSION" ]; then
+        echo "Upgrade available"
+        sudo ros os upgrade -f --no-reboot &>> /var/log/os-updater.log
+        STATUS=$?
+        if [ $STATUS -eq 0 ]; then
+          sudo touch /var/lib/rancher/update/need_to_reboot
+        else
+          echo "Upgrade failed"
+        fi
+      else
+        echo "No upgrade available"
+      fi
+
+      exit $STATUS
+
+  # Check if it's a good time to reboot
+  - path: /var/lib/rancher/os-rebooter.sh
+    permissions: "0755"
+    owner: root
+    content: |
+      #!/bin/sh
+      if [ -f /var/lib/rancher/update/reboot_now ] && [ -f /var/lib/rancher/update/need_to_reboot ]; then
+        sudo rm /var/lib/rancher/update/need_to_reboot
+        sudo rm /var/lib/rancher/update/reboot_now
+        sudo reboot
+      fi
+
+# Rancher cronjob
+rancher:
+  services:
+    # os-updater CRONJOB @hourly
+    os-updater:
+      image: rancher/os-base:v1.5.5
+      command: /var/lib/rancher/os-updater.sh
+      labels:
+        io.rancher.os.scope: "system"
+        cron.schedule: "0 0 * * * ?"
+      pid: host
+      privileged: true
+      volumes_from:
+        - all-volumes
+    # os-rebooter CRONJOB @minute
+    os-rebooter:
+      image: rancher/os-base:v1.5.5
+      command: /var/lib/rancher/os-rebooter.sh
+      labels:
+        io.rancher.os.scope: "system"
+        cron.schedule: "0 * * * * ?"
+      pid: host
+      privileged: true
+      volumes_from:
+        - all-volumes
+```
 
 ### Setting a schedule
 
