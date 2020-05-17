@@ -7,7 +7,7 @@
 * [Configuration](#configuration)
 	* [Reboot Sentinel File & Period](#reboot-sentinel-file-&-period)
   * [Host Sentinel File](#host-sentinel-file)
-    * [RancherOS example](#RancherOS-example-(cloud-init-config))
+    * [RancherOS example](#RancherOS-example-cloud-init-config)
   * [Setting a schedule](#setting-a-schedule)
   * [Blocking Reboots via Alerts](#blocking-reboots-via-alerts)
   * [Blocking Reboots via Pods](#blocking-reboots-via-pods)
