@@ -144,8 +144,8 @@ func sentinelExists() bool {
 	} else {
 		// Relies on the ability to access underlying host filesystem
 		// If hostSentinel is set, don't use nsenter for validating rebootSentinel
-		if _, err := os.Open(rebootSentinel); err == nil {
-			return true
+		if _, err := os.Open(rebootSentinel); err != nil {
+			return false
 		}
 	}
 	return true
@@ -284,7 +284,7 @@ func commandReboot(nodeID string) {
 		if _, err := os.Create(hostSentinel); err != nil {
 			log.Fatalf("Error invoking reboot command: %v", err)
 		} else {
-			log.Infof("Creating hostSentinel file: %s", hostSentinel)
+			log.Infof("Creating host-sentinel file: %s", hostSentinel)
 			log.Infof("Your underlying host OS need to have a mecanism to reboot when %s exist", hostSentinel)
 			return
 		}
@@ -368,6 +368,9 @@ func root(cmd *cobra.Command, args []string) {
 	log.Infof("Node ID: %s", nodeID)
 	log.Infof("Lock Annotation: %s/%s:%s", dsNamespace, dsName, lockAnnotation)
 	log.Infof("Reboot Sentinel: %s every %v", rebootSentinel, period)
+	if hostSentinel != "" {
+		log.Infof("Host Sentinel: %s", hostSentinel)
+	}
 	log.Infof("Blocking Pod Selectors: %v", podSelectors)
 	log.Infof("Reboot on: %v", window)
 
