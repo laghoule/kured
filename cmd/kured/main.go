@@ -180,7 +180,7 @@ func rebootBlocked(client *kubernetes.Clientset, nodeID string) bool {
 
 	fieldSelector := fmt.Sprintf("spec.nodeName=%s", nodeID)
 	for _, labelSelector := range podSelectors {
-		podList, err := client.CoreV1().Pods("").List(context.TODO, metav1.ListOptions{
+		podList, err := client.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{
 			LabelSelector: labelSelector,
 			FieldSelector: fieldSelector,
 			Limit:         10})
@@ -332,7 +332,7 @@ func rebootAsRequired(nodeID string, window *timewindow.TimeWindow) {
 	tick := delaytick.New(source, period)
 	for range tick {
 		if window.Contains(time.Now()) && rebootRequired() && !rebootBlocked(client, nodeID) {
-			node, err := client.CoreV1().Nodes().Get(context.TODO, nodeID, metav1.GetOptions{})
+			node, err := client.CoreV1().Nodes().Get(context.TODO(), nodeID, metav1.GetOptions{})
 			if err != nil {
 				log.Fatal(err)
 			}
